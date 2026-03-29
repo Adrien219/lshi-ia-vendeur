@@ -24,6 +24,10 @@ load_dotenv(os.path.join(ROOT_DIR, ".env"))
 # ========================================================
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 genai.configure(api_key=GEMINI_API_KEY)
+# À mettre juste après genai.configure
+for m in genai.list_models():
+    if 'generateContent' in m.supported_generation_methods:
+        print(f"Modèle dispo : {m.name}")
 # Utilisation de Flash pour la rapidité et les quotas généreux
 model = genai.GenerativeModel('models/gemini-1.5-flash')
 
