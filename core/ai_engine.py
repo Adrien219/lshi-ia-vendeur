@@ -25,7 +25,7 @@ load_dotenv(os.path.join(ROOT_DIR, ".env"))
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 genai.configure(api_key=GEMINI_API_KEY)
 # Utilisation de Flash pour la rapidité et les quotas généreux
-model = genai.GenerativeModel('gemini-1.5-flash')
+model = genai.GenerativeModel('models/gemini-1.5-flash')
 
 def preparer_image_pour_gemini(image_input):
     """Compresse et convertit l'entrée (chemin ou b64) pour Gemini."""
