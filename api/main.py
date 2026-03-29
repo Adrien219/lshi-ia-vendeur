@@ -14,6 +14,8 @@ from core.ai_engine import traiter_nouvel_arrivage
 load_dotenv(os.path.join(ROOT_DIR, ".env"))
 
 app = Flask(__name__)
+# Augmentation de la taille max pour recevoir les images en Base64
+app.config['MAX_CONTENT_LENGTH'] = 64 * 1024 * 1024 
 
 BOUTIQUE_NOM      = os.getenv("BOUTIQUE_NOM", "Lshi-IA-Vendeur")
 BOUTIQUE_ADRESSE  = os.getenv("BOUTIQUE_ADRESSE", "Centre-Ville de Lubumbashi, avenue de la Libération")
@@ -116,14 +118,17 @@ def whatsapp_webhook():
 
         message_client = data.get('text', '').strip()
         sender         = data.get('sender', 'Client')
-        image_path     = data.get('image_path', None)
+        # MODIFICATION : On récupère 'image' qui contient le Base64
+        image_data     = data.get('image', None) 
 
         print(f"📩 {sender} : {message_client}")
 
         if est_code_patron(message_client):
             print(f"🔑 Code patron — {sender}")
-            if image_path and os.path.exists(image_path):
-                reponse = traiter_nouvel_arrivage(image_path, message_client)
+            # MODIFICATION : On vérifie si image_data existe (plus besoin de os.path.exists)
+            if image_data: 
+                # Ton ai_engine doit être prêt à recevoir le Base64
+                reponse = traiter_nouvel_arrivage(image_data, message_client)
             else:
                 reponse = (
                     "✅ Code patron reçu !\n\n"
@@ -143,7 +148,6 @@ def whatsapp_webhook():
 
 @app.route('/health', methods=['GET'])
 def health():
-    """Railway / Render utilisent cette route pour vérifier que le service est vivant."""
     return jsonify({"status": "online", "service": BOUTIQUE_NOM}), 200
 
 

@@ -5,7 +5,7 @@
  *
  * CONFIGURATION :
  * Créer un fichier .env dans ce dossier avec :
- *   FLASK_URL=https://TON_APP.up.railway.app
+ * FLASK_URL=https://TON_APP.up.railway.app
  */
 
 const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
@@ -14,8 +14,10 @@ const axios   = require('axios');
 const express = require('express');
 require('dotenv').config();
 
+// --- AJOUT : FONCTION DE DÉLAI ---
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
 // ─── URL DU BOT ───────────────────────────────────────────
-// En production : ton URL Railway. En dev local : http://127.0.0.1:5000
 const FLASK_URL = process.env.FLASK_URL || 'http://127.0.0.1:5000';
 console.log(`🔗 Bot connecté sur : ${FLASK_URL}`);
 // ──────────────────────────────────────────────────────────
@@ -87,18 +89,23 @@ client.on('message', async (msg) => {
     try {
         let mediaData = null;
 
-        // Télécharger l'image si le patron envoie une photo avec *1234*
+        // --- MODIFICATION : ATTENTE DU TÉLÉCHARGEMENT ---
         if (msg.hasMedia && msg.type === 'image') {
+            console.log("⏳ Image détectée, préparation du téléchargement...");
+            await sleep(2000); // Laisse 2 secondes à WhatsApp pour charger le binaire
             const media = await msg.downloadMedia();
-            mediaData = media.data; // base64
+            if (media) {
+                mediaData = media.data; // base64
+                console.log("📸 Image prête !");
+            }
         }
 
-        // Envoyer au bot Railway
+        // Envoyer au bot Railway (Timeout augmenté à 60s pour l'analyse IA)
         const response = await axios.post(`${FLASK_URL}/whatsapp`, {
             text:   msg.body || '',
             sender: msg.from,
             image:  mediaData   // null si pas d'image
-        }, { timeout: 30000 });
+        }, { timeout: 60000 });
 
         if (response.data && response.data.reply) {
             await client.sendMessage(msg.from, response.data.reply);
@@ -106,7 +113,6 @@ client.on('message', async (msg) => {
 
     } catch (e) {
         console.log('⚠️ Erreur message :', e.message);
-        // Si Railway est temporairement down, ne pas crasher
     }
 });
 
