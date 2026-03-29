@@ -8,6 +8,7 @@ import requests
 from io import BytesIO
 from dotenv import load_dotenv
 from PIL import Image
+import google.generativeai as genai
 
 # --- CONFIGURATION DES CHEMINS ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -19,133 +20,77 @@ from data.database import enregistrer_produit
 load_dotenv(os.path.join(ROOT_DIR, ".env"))
 
 # ========================================================
-# CONFIGURATION API
-# On utilise l'API Claude (Anthropic) à la place de Gemini.
-# Pourquoi ? Quota Gemini Free Tier épuisé, et Claude supporte
-# la vision (analyse d'image) avec un tarif très compétitif.
-# Clé à mettre dans .env : ANTHROPIC_API_KEY=sk-ant-...
+# CONFIGURATION GEMINI
 # ========================================================
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
-ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
-MODEL = "claude-haiku-4-5-20251001"  # Rapide et économique, supporte la vision
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+genai.configure(api_key=GEMINI_API_KEY)
+# Utilisation de Flash pour la rapidité et les quotas généreux
+model = genai.GenerativeModel('gemini-1.5-flash')
 
-
-def compresser_image_b64(chemin_image):
-    """Réduit le poids de l'image pour optimiser les tokens API."""
+def preparer_image_pour_gemini(image_input):
+    """Compresse et convertit l'entrée (chemin ou b64) pour Gemini."""
     try:
-        with Image.open(chemin_image) as img:
-            if img.mode in ("RGBA", "P"):
-                img = img.convert("RGB")
-            img.thumbnail((1024, 1024))
-            buffer = BytesIO()
-            img.save(buffer, format="JPEG", quality=75)
-            return base64.b64encode(buffer.getvalue()).decode('utf-8')
+        if isinstance(image_input, str) and os.path.exists(image_input):
+            img = Image.open(image_input)
+        else:
+            img_data = base64.b64decode(image_input)
+            img = Image.open(BytesIO(img_data))
+
+        if img.mode in ("RGBA", "P"):
+            img = img.convert("RGB")
+        
+        img.thumbnail((1024, 1024))
+        buffer = BytesIO()
+        img.save(buffer, format="JPEG", quality=70) # Qualité 70 pour alléger le payload
+        return buffer.getvalue()
     except Exception as e:
-        print(f"⚠️ Erreur compression: {e}")
-        with open(chemin_image, "rb") as f:
-            return base64.b64encode(f.read()).decode('utf-8')
+        print(f"⚠️ Erreur image: {e}")
+        return None
 
-
-def publier_statut_whatsapp(chemin_image, nom, prix):
-    """Envoi vers le pont Node.js WhatsApp Bridge."""
-    try:
-        with open(chemin_image, "rb") as f:
-            img_b64 = base64.b64encode(f.read()).decode('utf-8')
-
-        legende = f"🔥 NOUVEL ARRIVAGE !\n\n🛍️ {nom}\n💰 {prix}\n\n📍 Dispo à Lubumbashi ! 🚀"
-
-        requests.post("http://127.0.0.1:3000/post-status", json={
-            "imageBase64": img_b64,
-            "caption": legende
-        }, timeout=30)
-        print("📢 Statut WhatsApp publié.")
-    except Exception as e:
-        print(f"❌ Erreur Statut : {e}")
-
-
-def analyser_image_claude(image_data, message_patron):
-    """
-    Appelle l'API Claude Vision pour analyser un vêtement.
-    Remplace l'ancien appel Gemini qui tombait en 429.
-    """
-    if not ANTHROPIC_API_KEY:
-        return None, "❌ ANTHROPIC_API_KEY manquante dans le fichier .env"
+def analyser_image_gemini(img_bytes, message_patron):
+    """Appel à l'API Gemini avec gestion du Rate Limit."""
+    if not GEMINI_API_KEY:
+        return None, "❌ Clé API Gemini manquante."
 
     prompt = (
-        f"Tu es un vendeur expert à Lubumbashi. Le patron dit : '{message_patron}'. "
-        "Analyse l'image de ce vêtement et renvoie EXCLUSIVEMENT un JSON valide comme ceci : "
-        '{"NOM": "Nom court du vêtement", "PRIX": "Prix en USD", "DESC": "Description courte et commerciale"} '
-        "Exemple : {\"NOM\": \"Veste en cuir noire\", \"PRIX\": \"90$\", \"DESC\": \"Veste slim fit, taille M, cuir synthétique premium\"}"
+        f"Tu es un vendeur expert à Lubumbashi. Le patron envoie cette photo avec le message : '{message_patron}'. "
+        "Analyse le vêtement et réponds UNIQUEMENT avec ce JSON : "
+        '{"NOM": "Nom court", "PRIX": "Prix", "DESC": "Description commerciale courte"}'
     )
 
-    payload = {
-        "model": MODEL,
-        "max_tokens": 256,
-        "messages": [{
-            "role": "user",
-            "content": [
-                {
-                    "type": "image",
-                    "source": {
-                        "type": "base64",
-                        "media_type": "image/jpeg",
-                        "data": image_data
-                    }
-                },
-                {"type": "text", "text": prompt}
-            ]
-        }]
-    }
-
-    headers = {
-        "x-api-key": ANTHROPIC_API_KEY,
-        "anthropic-version": "2023-06-01",
-        "content-type": "application/json"
-    }
+    # Préparation du contenu pour Gemini
+    image_part = {"mime_type": "image/jpeg", "data": img_bytes}
 
     for tentative in range(3):
         try:
-            response = requests.post(ANTHROPIC_URL, headers=headers, json=payload, timeout=30)
-
-            if response.status_code == 429:
-                attente = (tentative + 1) * 10
-                print(f"⏳ Rate limit. Attente {attente}s...")
-                time.sleep(attente)
-                continue
-
-            if response.status_code != 200:
-                return None, f"❌ Erreur API Claude {response.status_code}: {response.text}"
-
-            res_json = response.json()
-            texte_raw = res_json['content'][0]['text']
-
-            # Extraction JSON robuste par regex
-            match = re.search(r'\{.*?\}', texte_raw, re.DOTALL)
-            if not match:
-                return None, f"❌ L'IA n'a pas renvoyé un JSON valide. Réponse: {texte_raw}"
-
-            data = json.loads(match.group())
-            return data, None
+            response = model.generate_content([prompt, image_part])
+            
+            # Extraction du JSON dans la réponse
+            match = re.search(r'\{.*?\}', response.text, re.DOTALL)
+            if match:
+                return json.loads(match.group()), None
+            return None, "❌ Format JSON non trouvé dans la réponse IA."
 
         except Exception as e:
-            return None, f"❌ Erreur critique : {str(e)}"
+            if "429" in str(e):
+                attente = (tentative + 1) * 5
+                print(f"⏳ Rate limit Gemini. Attente {attente}s...")
+                time.sleep(attente)
+                continue
+            return None, f"❌ Erreur Gemini : {str(e)}"
+    
+    return None, "❌ Trop de tentatives (Quota dépassé)."
 
-    return None, "❌ Trop de tentatives échouées. Réessayez dans quelques minutes."
-
-
-def traiter_nouvel_arrivage(chemin_image, message_patron):
-    """Pipeline L4 : Compression → Vision IA → DB → Publication WhatsApp."""
+def traiter_nouvel_arrivage(image_source, message_patron):
+    """Pipeline : Réception -> Gemini -> DB."""
     try:
-        if not os.path.exists(chemin_image):
-            return "❌ Image introuvable."
+        # 1. Préparation Image
+        img_bytes = preparer_image_pour_gemini(image_source)
+        if not img_bytes:
+            return "❌ Erreur de traitement de l'image."
 
-        print(f"🔍 Analyse en cours : {os.path.basename(chemin_image)}")
-
-        # 1. Compression image
-        image_data = compresser_image_b64(chemin_image)
-
-        # 2. Analyse Claude Vision
-        data, erreur = analyser_image_claude(image_data, message_patron)
+        # 2. Analyse Gemini
+        data, erreur = analyser_image_gemini(img_bytes, message_patron)
         if erreur:
             return erreur
 
@@ -153,22 +98,13 @@ def traiter_nouvel_arrivage(chemin_image, message_patron):
         prix = data.get('PRIX', 'À discuter')
         desc = data.get('DESC', 'Disponible.')
 
-        print(f"📦 Produit détecté : {nom} — {prix}")
-
-        # 3. Enregistrement DB
-        if not enregistrer_produit(nom=nom, prix=prix, description=desc, image_path=chemin_image):
-            return "❌ Erreur enregistrement en base de données."
-
-        # 4. Publication statut WhatsApp
-        publier_statut_whatsapp(chemin_image, nom, prix)
-
-        return f"✅ *{nom}* ({prix}) ajouté au stock et publié sur WhatsApp !"
+        # 3. Sauvegarde DB
+        # On utilise une constante pour le chemin sur Railway
+        success = enregistrer_produit(nom=nom, prix=prix, description=desc, image_path="RAILWAY_STORAGE")
+        
+        if success:
+            return f"✅ *{nom}* ({prix}) ajouté à l'inventaire Lshi-IA ! 🧥"
+        return "❌ Erreur lors de l'enregistrement en base de données."
 
     except Exception as e:
         return f"❌ Erreur pipeline : {str(e)}"
-
-
-if __name__ == "__main__":
-    img_test = os.path.join(ROOT_DIR, "tests", "article.jpg")
-    print(f"🚀 Test sur : {img_test}")
-    print(traiter_nouvel_arrivage(img_test, "*1234* Belle veste noire 90$"))
