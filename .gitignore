@@ -1,0 +1,31 @@
+# Variables secrètes — NE JAMAIS commiter
+.env
+*.env
+
+# Base de données locale (Railway utilise un volume persistant)
+data/inventaire.db
+data/*.db
+
+# Fichiers Python compilés
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Sessions WhatsApp (locales uniquement)
+whatsapp_bridge/.wwebjs_auth/
+whatsapp_bridge/.wwebjs_cache/
+
+# Node modules
+whatsapp_bridge/node_modules/
+
+# Fichiers système
+.DS_Store
+Thumbs.db
+
+# Notebooks Jupyter
+*.ipynb
+
+# Tests
+tests/
